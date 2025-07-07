@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Floaty</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-content">
+        <div class="header-titles">
+          <h1>Floaty</h1>
+          <h2 class="header-subtitle">AI Note Taker & Smart Task Detection</h2>
+        </div>
+        
+        <div class="header-actions">
+          <button id="closeExtension" class="close-header-btn" title="Close">×</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Global Search (Hidden by default) -->
+    <div id="globalSearch" class="global-search hidden">
+      <div class="search-container">
+        <input type="text" id="globalSearchInput" placeholder="Search all notes and saved items..." class="global-search-input">
+        <button id="closeSearch" class="close-search-btn">×</button>
+      </div>
+      <div id="globalSearchResults" class="scrollable"></div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="tab-nav">
+      <button class="tab-btn active" data-tab="notes">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2">
+            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+            <polyline points="14,2 14,8 20,8"></polyline>
+          </svg>
+        <span>Notes</span>
+      </button>
+      <button class="tab-btn" data-tab="saved">
+        <img src="components/icons/folder.png" width="14" height="14" alt="Saved" class="tab-icon"/>
+        <span>Saved</span>
+      </button>
+      <button class="tab-btn" data-tab="tasks">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2">
+            <polyline points="9,11 12,14 22,4"></polyline>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+        <span>Tasks</span>
+      </button>
+    </div>
+
+    <!-- Notes Tab -->
+    <div id="notesTab" class="tab-content active">
+      <div class="input-row">
+        <div class="context-input">
+          <input type="text" id="contextField" placeholder="Context (project, meeting, etc.)" maxlength="50">
+        </div>
+      </div>
+      
+      <div class="note-input">
+        <div style="position: relative;">
+          <div id="interimMirror" style="visibility: hidden; position: absolute; left: -9999px; top: 0; white-space: pre-wrap; word-wrap: break-word;"></div>
+          <div id="interimOverlay" style="pointer-events: none; position: absolute; left: 0; top: 0; width: 100%; height: 100%; color: #bbb; font-size: 15px; line-height: 1.5; padding: 8px 12px; white-space: pre-wrap; z-index: 2; user-select: none; display: none;"></div>
+          <textarea id="noteText" class="note-textarea" placeholder="Write your note here... Press Ctrl+Shift+D for dictation. Press Ctrl+Shift+N to focus here. AI will auto-generate title and extract tasks" rows="8"></textarea>
+          <!-- Mic button and red dot inside textarea container -->
+          <div style="position: absolute; bottom: 12px; right: 12px; display: flex; flex-direction: column; align-items: center; z-index: 3;">
+            <button id="voiceDictationBtn" class="voice-control-btn" title="Voice Dictation" style="position: relative;">
+              <div id="micActiveDot" class="mic-dot" style="display: none; position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; background: red; border-radius: 50%; box-shadow: 0 0 2px #c00;"></div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+            </button>
+          </div>
+          <!-- Optionally, move TTS button here as well for symmetry -->
+          <div style="position: absolute; bottom: 12px; right: 48px; z-index: 3;">
+            <button id="voiceTTSBtn" class="voice-control-btn" title="Text-to-Speech">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="dictationStatus" class="dictation-status hidden">
+          <div class="pulse-dot"></div>
+          <span>Listening...</span>
+        </div>
+        <div class="input-actions">
+          <div class="checkboxes">
+            <label class="ai-checkbox">
+              <input type="checkbox" id="extractTasksCheckbox" checked>
+              <span>AI Extract tasks</span>
+            </label>
+          </div>
+          <div class="action-buttons">
+            <button id="addNoteBtn" class="primary-btn">
+              <span id="addNoteBtnText">Add Note</span>
+              <div id="addNoteLoader" class="loading hidden">
+                <div class="loading-spinner"></div>
+                Processing...
+              </div>
+            </button>
+            <button id="clearBtn" class="secondary-btn">Clear</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Saved Tab -->
+    <div id="savedTab" class="tab-content">
+      <div class="input-row">
+        <div class="context-input">
+          <input type="text" id="searchField" placeholder="Search saved notes...">
+        </div>
+        <button id="clearSavedBtn" class="secondary-btn">Clear All</button>
+      </div>
+      <div id="savedList" class="scrollable"></div>
+      
+      <!-- Floating AI Summary Button -->
+      <div class="floating-ai-btn-container">
+        <button id="generateAllSummariesBtn" class="floating-ai-btn" title="Generate AI summaries for all saved items">
+          <span id="generateAllSummariesText">AI</span>
+          <div id="generateAllSummariesLoader" class="loading hidden">
+            <div class="loading-spinner"></div>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tasks Tab -->
+    <div id="tasksTab" class="tab-content">
+      <div class="task-input-container">
+        <input type="text" id="taskText" class="task-input" placeholder="Write something... meeting notes, snippets, ideas, tasks">
+        <button id="addTaskBtn" class="primary-btn task-add-btn">Add task</button>
+      </div>
+      <div class="datetime-display task-stats" id="taskStats">
+        0 tasks • 0 completed
+      </div>
+      <div id="tasksList" class="scrollable"></div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="noteModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalTitle">Note Details</h3>
+        <div class="flex-center">
+          <button id="readAloudBtn" class="icon-btn small" title="Read Aloud">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+          </button>
+          <button id="closeModal" class="close-btn">×</button>
+        </div>
+      </div>
+      <div class="modal-body scrollable">
+        <div class="note-detail-field">
+          <label>Context:</label>
+          <div id="modalNoteContext" class="item-context"></div>
+        </div>
+        <div class="note-detail-field">
+          <label>Date & Time:</label>
+          <div id="modalNoteDate"></div>
+        </div>
+        <div class="note-detail-field">
+          <label>Full Content:</label>
+          <div id="modalNoteContent" class="note-content"></div>
+        </div>
+        <div id="modalNoteSummary" class="note-detail-field hidden">
+          <label>AI Summary:</label>
+          <div id="modalSummaryContent" class="ai-summary"></div>
+        </div>
+        <div id="modalNoteHighlights" class="note-detail-field hidden">
+          <label>Action Items:</label>
+          <div id="modalHighlightsContent"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="copyNoteContent" class="primary-btn">Copy</button>
+        <button id="generateSummary" class="ai-btn">
+          <span id="generateSummaryText">AI Summary</span>
+          <div id="generateSummaryLoader" class="loading hidden">
+            <div class="loading-spinner"></div>
+            Generating...
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TTS Status -->
+  <div id="ttsStatus" class="tts-status hidden">
+    <div class="tts-content">
+      <span class="tts-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+        </svg>
+      </span>
+      <span class="tts-text">Reading aloud...</span>
+      <button id="stopTTS" class="tts-stop-btn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="6" y="4" width="4" height="16"></rect>
+          <rect x="14" y="4" width="4" height="16"></rect>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Tasks Dialog -->
+  <div id="tasksDialog" class="modal hidden">
+          <div class="modal-content tasks-dialog-content">
+      <div class="modal-header">
+        <h3>Tasks Extracted</h3>
+        <button id="closeTasksDialog" class="close-btn">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="extractedTasksList" class="scrollable"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="addAllTasksBtn" class="primary-btn">Add All Tasks</button>
+        <button id="closeTasksDialogBtn" class="secondary-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Detection Dialog -->
+  <div id="taskDetectionDialog" class="modal hidden">
+    <div class="modal-content task-detection-content">
+      <div class="modal-header">
+        <div class="task-detection-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2" class="task-detection-icon">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 16v-4"></path>
+            <path d="M12 8h.01"></path>
+          </svg>
+          <h3>Smart Task Detection</h3>
+        </div>
+        <button id="closeTaskDetection" class="close-btn">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="task-detection-subtitle">Found 4 potential action items in your note</div>
+        
+        <div id="detectedTasksList" class="detected-tasks-list">
+          <!-- Tasks will be inserted here -->
+        </div>
+
+        <div class="task-detection-summary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2">
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+            <polyline points="13 2 13 9 20 9"></polyline>
+          </svg>
+          <span>Tasks marked with ✓ in your saved note indicate extracted action items.</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelTaskDetection" class="secondary-btn">Cancel</button>
+        <button id="addSelectedTasks" class="primary-btn">Add a Task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info Button -->
+  <div class="info-button-bottom-left">
+    <button id="infoButton" class="info-button" title="Show Keyboard Shortcuts">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M12 7h.01"></path>
+        <path d="M11 12h1v4h1"></path>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Hotkeys Info Modal -->
+  <div id="hotkeysModal" class="modal hidden">
+    <div class="modal-content hotkeys-modal">
+      <div class="modal-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button id="closeHotkeysModal" class="close-btn">×</button>
+      </div>
+      <div class="modal-body scrollable">
+        <div class="hotkeys-section">
+          <h4>Global Shortcuts</h4>
+          <div class="hotkey-grid">
+            <div class="hotkey-item">
+              <span class="hotkey">Esc</span>
+              <span class="description">Close modal or extension</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">/</span>
+              <span class="description">Toggle global search</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hotkeys-section">
+          <h4>Power User Shortcuts (Ctrl+Shift)</h4>
+          <div class="hotkey-grid">
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + F</span>
+              <span class="description">Toggle global search</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + D</span>
+              <span class="description">Toggle dictation</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + N</span>
+              <span class="description">Focus note textarea</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + T</span>
+              <span class="description">Switch to tasks tab & focus</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + S</span>
+              <span class="description">Switch to saved tab & focus search</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + 1</span>
+              <span class="description">Switch to notes tab</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + 2</span>
+              <span class="description">Switch to saved tab</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">Ctrl + Shift + 3</span>
+              <span class="description">Switch to tasks tab</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hotkeys-section">
+          <h4>Quick Navigation (when not typing)</h4>
+          <div class="hotkey-grid">
+            <div class="hotkey-item">
+              <span class="hotkey">N</span>
+              <span class="description">Switch to notes tab & focus</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">T</span>
+              <span class="description">Switch to tasks tab & focus</span>
+            </div>
+            <div class="hotkey-item">
+              <span class="hotkey">S</span>
+              <span class="description">Switch to saved tab</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
