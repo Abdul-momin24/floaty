@@ -145,6 +145,57 @@ class FloatyBackground {
         return true;
       }
 
+      // 5. Highlight API
+      if (message.action === 'saveHighlight') {
+        // message: { action, url, text, selector, offset, createdAt }
+        chrome.storage.local.get({ highlights: [] }, (result) => {
+          let highlights = result.highlights || [];
+          // Remove expired highlights (older than 10 days)
+          const now = Date.now();
+          highlights = highlights.filter(h => now - h.createdAt < 10 * 24 * 60 * 60 * 1000);
+          // Add new highlight
+          highlights.push({
+            url: message.url,
+            text: message.text,
+            selector: message.selector,
+            offset: message.offset,
+            createdAt: message.createdAt || Date.now(),
+            id: message.id || Date.now() + Math.floor(Math.random() * 1000000)
+          });
+          chrome.storage.local.set({ highlights }, () => {
+            sendResponse({ success: true });
+          });
+        });
+        return true;
+      }
+      if (message.action === 'getHighlights') {
+        chrome.storage.local.get({ highlights: [] }, (result) => {
+          const now = Date.now();
+          // Remove expired highlights
+          let highlights = (result.highlights || []).filter(h => now - h.createdAt < 10 * 24 * 60 * 60 * 1000);
+          // Optionally, clean up expired highlights
+          chrome.storage.local.set({ highlights }, () => {
+            if (message.all) {
+              sendResponse({ success: true, highlights });
+            } else {
+              // Only return highlights for the requested URL
+              sendResponse({ success: true, highlights: highlights.filter(h => h.url === message.url) });
+            }
+          });
+        });
+        return true;
+      }
+      if (message.action === 'removeHighlight') {
+        chrome.storage.local.get({ highlights: [] }, (result) => {
+          let highlights = result.highlights || [];
+          highlights = highlights.filter(h => String(h.id) !== String(message.id));
+          chrome.storage.local.set({ highlights }, () => {
+            sendResponse({ success: true });
+          });
+        });
+        return true;
+      }
+
       // Unknown action
 sendResponse({ success: false, error: 'Unknown action' })
       return true

@@ -11,6 +11,7 @@ class FloatyContentScript {
     this.currentPageTitle = document.title
     this.debounceTimer = null
     this.contextCheckInterval = null
+    this.highlightedSpans = []
     this.init()
   }
 
@@ -20,6 +21,7 @@ class FloatyContentScript {
     // Always set up event listeners first
     this.setupEventListeners()
     this.setupHotkeys()
+    this.restoreHighlights()
     
     // Check if extension context is valid for background communication
     if (this.isExtensionContextValid()) {
@@ -262,23 +264,109 @@ class FloatyContentScript {
 
     try {
       console.log('Floaty: Attempting to highlight text:', this.selectedText.substring(0, 50) + '...')
-      
       // Create highlight span
       const span = document.createElement('span')
       span.style.backgroundColor = '#fff3cd'
       span.style.borderBottom = '2px solid #ffc107'
       span.style.padding = '2px 0'
       span.className = 'floaty-highlight'
-      
       // Use the stored range to highlight
       this.selectedRange.surroundContents(span)
-      
+      this.highlightedSpans.push(span)
+      // Save highlight info to background
+      // Save the XPath of the parent element, not the span
+      const parentElement = span.parentNode;
+      const selector = this.getXPathForElement(parentElement);
+      // Optionally, store the offset of the highlighted text within the parent
+      const parentText = parentElement.textContent;
+      const offset = parentText.indexOf(this.selectedText);
+      chrome.runtime.sendMessage({
+        action: 'saveHighlight',
+        url: this.currentUrl,
+        text: this.selectedText,
+        selector,
+        offset,
+        createdAt: Date.now()
+      }, (response) => {
+        if (response && response.success) {
+          this.showNotification('Highlight saved!', 'success')
+        }
+      })
       console.log('Floaty: Text highlighted successfully')
       this.showNotification('Text highlighted!', 'success')
       this.hidePopup()
     } catch (error) {
       console.error('Floaty: Failed to highlight text:', error)
       this.showNotification('Failed to highlight text: ' + error.message, 'error')
+    }
+  }
+
+  restoreHighlights() {
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+    chrome.runtime.sendMessage({ action: 'getHighlights', url: this.currentUrl }, (response) => {
+      if (response && response.success && Array.isArray(response.highlights)) {
+        response.highlights.forEach(h => {
+          this.applyHighlightFromSelector(h.selector, h.text)
+        })
+      }
+    })
+  }
+
+  applyHighlightFromSelector(selector, text) {
+    try {
+      const el = this.getElementByXPath(selector)
+      if (!el || !text) return;
+      // Find the first text node containing the highlight text
+      let walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+      let found = false;
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const idx = node.nodeValue.indexOf(text);
+        if (idx !== -1) {
+          // Found the text, wrap it in a span
+          const range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + text.length);
+          const span = document.createElement('span');
+          span.style.backgroundColor = '#fff3cd';
+          span.style.borderBottom = '2px solid #ffc107';
+          span.style.padding = '2px 0';
+          span.className = 'floaty-highlight';
+          range.surroundContents(span);
+          this.highlightedSpans.push(span);
+          found = true;
+          break;
+        }
+      }
+      // If not found, do nothing
+    } catch (e) {
+      // Fail silently
+    }
+  }
+
+  getXPathForElement(element) {
+    // Returns XPath for a given element
+    if (element.id !== '') return 'id("' + element.id + '")';
+    if (element === document.body) return '/html/body';
+    let ix = 0;
+    const siblings = element.parentNode ? element.parentNode.childNodes : [];
+    for (let i = 0; i < siblings.length; i++) {
+      const sibling = siblings[i];
+      if (sibling === element) {
+        return this.getXPathForElement(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';
+      }
+      if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {
+        ix++;
+      }
+    }
+    return '';
+  }
+
+  getElementByXPath(path) {
+    try {
+      return document.evaluate(path, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    } catch (e) {
+      return null;
     }
   }
 

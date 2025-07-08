@@ -203,6 +203,8 @@ class FloatyExtension {
     this.currentModalNote = null
     this.detectedTasks = []
     this.gemini = new GeminiAIService()
+    this.highlights = []
+    this.allHighlights = []
 
     this.init()
   }
@@ -214,7 +216,8 @@ class FloatyExtension {
     this.updateTaskStats()
     this.setupSpeechRecognition()
     this.setupKeyboardShortcuts()
-
+    this.loadHighlights()
+    this.loadAllHighlights()
     // Update datetime every minute
     setInterval(() => this.updateDateTime(), 60000)
   }
@@ -790,31 +793,23 @@ class FloatyExtension {
 
   // Tab Management
   switchTab(tabName) {
-    // Update tab buttons
-    document.querySelectorAll(".tab-btn").forEach((btn) => {
-      if (btn.dataset.tab === tabName) {
-        btn.classList.add("active")
-      } else {
-        btn.classList.remove("active")
-      }
-    })
-
-    // Update tab content
-    document.querySelectorAll(".tab-content").forEach((content) => {
-      if (content.id === `${tabName}Tab`) {
-        content.classList.add("active")
-        // Focus on the main input of the tab if available
-        const mainInput = content.querySelector('textarea, input[type="text"]')
-        if (mainInput) {
-          mainInput.focus()
-        }
-      } else {
-        content.classList.remove("active")
-      }
-    })
-
     this.currentTab = tabName
-    this.loadTabContent(tabName)
+    document.querySelectorAll(".tab-content").forEach((tab) => {
+      tab.classList.remove("active")
+      tab.style.display = "none"
+    })
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.classList.remove("active")
+    })
+    document.querySelector(`.tab-btn[data-tab='${tabName}']`).classList.add("active")
+    const tab = document.getElementById(`${tabName}Tab`)
+    if (tab) {
+      tab.classList.add("active")
+      tab.style.display = "block"
+    }
+    if (tabName === 'highlights') {
+      this.loadAllHighlights();
+    }
   }
 
   loadTabContent(tabName) {
@@ -2403,6 +2398,143 @@ class FloatyExtension {
     if (modal) {
       modal.classList.remove('hidden')
     }
+  }
+
+  loadHighlights() {
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+    chrome.runtime.sendMessage({ action: 'getHighlights', url: window.location.href }, (response) => {
+      if (response && response.success && Array.isArray(response.highlights)) {
+        this.highlights = response.highlights
+        this.renderHighlights()
+      }
+    })
+  }
+
+  renderHighlights() {
+    const container = document.getElementById('highlightsList')
+    if (!container) return
+    if (this.highlights.length === 0) {
+      container.innerHTML = '<div style="padding: 10px; color: #888;">No highlights for this page.</div>'
+      return
+    }
+    container.innerHTML = this.highlights.map(h => `
+      <div class="highlight-item" style="margin-bottom: 8px; padding: 6px 8px; background: #fffbe6; border-radius: 6px; border: 1px solid #ffe58f; display: flex; align-items: center; justify-content: space-between;">
+        <span style="flex:1; color: #856404; font-size: 13px;">${h.text}</span>
+        <button class="remove-highlight-btn" data-id="${h.id}" style="margin-left: 10px; background: none; border: none; color: #d32f2f; cursor: pointer; font-size: 15px;">✕</button>
+      </div>
+    `).join('')
+    container.querySelectorAll('.remove-highlight-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        const id = btn.getAttribute('data-id')
+        this.removeHighlight(id)
+      }
+    })
+  }
+
+  removeHighlight(id, reloadAll = false) {
+    chrome.runtime.sendMessage({ action: 'removeHighlight', id }, (response) => {
+      if (response && response.success) {
+        this.showNotification('Highlight removed');
+        if (reloadAll) {
+          this.loadAllHighlights();
+        } else {
+          this.loadHighlights();
+        }
+      }
+    })
+  }
+
+  loadAllHighlights() {
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+    chrome.runtime.sendMessage({ action: 'getHighlights', all: true }, (response) => {
+      if (response && response.success && Array.isArray(response.highlights)) {
+        this.allHighlights = response.highlights;
+        this.renderAllHighlights();
+      }
+    })
+  }
+
+  renderAllHighlights() {
+    const container = document.getElementById('allHighlightsList');
+    if (!container) return;
+    if (!this.allHighlights || this.allHighlights.length === 0) {
+      container.innerHTML = '<div style="padding: 10px; color: #888;">No highlights found.</div>';
+      return;
+    }
+    // Group highlights by URL
+    const grouped = {};
+    this.allHighlights.forEach(h => {
+      if (!grouped[h.url]) grouped[h.url] = [];
+      grouped[h.url].push(h);
+    });
+    container.innerHTML = Object.keys(grouped).map(url => {
+      const urlDisplay = url.length > 60 ? url.slice(0, 57) + '...' : url;
+      return `
+        <div class="highlight-url-group" style="margin-bottom: 18px;">
+          <div style="font-size: 13px; color: #3b82f6; margin-bottom: 6px;">
+            <a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline;">${urlDisplay}</a>
+          </div>
+          <div>
+            ${grouped[url].map(h => `
+              <div class="highlight-item" style="margin-bottom: 8px; padding: 6px 8px; background: #fffbe6; border-radius: 6px; border: 1px solid #ffe58f; display: flex; align-items: center; justify-content: space-between;">
+                <span class="highlight-text" data-id="${h.id}" style="flex:1; color: #856404; font-size: 13px; cursor:pointer; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; max-width: 220px; white-space: normal;">${this.truncateText(h.text, 120)}</span>
+                <button class="remove-highlight-btn" data-id="${h.id}" style="margin-left: 10px; background: none; border: none; color: #d32f2f; cursor: pointer; font-size: 15px;">✕</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+    container.querySelectorAll('.remove-highlight-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        const id = btn.getAttribute('data-id');
+        this.removeHighlight(id, true);
+      }
+    });
+    // Add click event for showing full highlight in a modal
+    container.querySelectorAll('.highlight-text').forEach(span => {
+      span.onclick = (e) => {
+        const id = span.getAttribute('data-id');
+        const highlight = this.allHighlights.find(h => String(h.id) === String(id));
+        if (highlight) this.showHighlightModal(highlight);
+      }
+    });
+  }
+
+  showHighlightModal(highlight) {
+    // Remove any existing modal
+    const existing = document.getElementById('floaty-popup-highlight-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'floaty-popup-highlight-modal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.25); z-index: 10001;
+      display: flex; align-items: center; justify-content: center;
+    `;
+
+    const inner = document.createElement('div');
+    inner.style.cssText = `
+      background: #fff; border-radius: 10px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+      padding: 24px 28px; min-width: 320px; max-width: 90vw; max-height: 80vh; overflow-y: auto;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; position: relative;
+    `;
+
+    inner.innerHTML = `
+      <div style="font-size: 18px; font-weight: 600; margin-bottom: 12px;">Highlight</div>
+      <div style="font-size: 15px; color: #222; margin-bottom: 18px; white-space: pre-wrap;">${highlight.text}</div>
+      <button id="floaty-popup-close-highlight-modal" style="position: absolute; top: 10px; right: 12px; background: none; border: none; font-size: 20px; color: #888; cursor: pointer;">×</button>
+      <button id="floaty-popup-close-highlight-modal-btn" style="display: block; margin: 0 auto; padding: 7px 22px; background: #3b82f6; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer;">Close</button>
+    `;
+
+    modal.appendChild(inner);
+    document.body.appendChild(modal);
+
+    // Close handlers
+    document.getElementById('floaty-popup-close-highlight-modal').onclick =
+      document.getElementById('floaty-popup-close-highlight-modal-btn').onclick =
+        () => modal.remove();
   }
 }
 
