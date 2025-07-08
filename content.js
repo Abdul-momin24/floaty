@@ -180,6 +180,9 @@ class FloatyContentScript {
           <button class="floaty-action-btn floaty-save-btn" title="Save to notes">
             <span class="floaty-btn-text">Save</span>
           </button>
+                 <button class="floaty-action-btn floaty-tasks-btn" title="Extract tasks">
+            <span class="floaty-btn-text">Tasks</span>
+          </button>
           <button class="floaty-action-btn floaty-copy-btn" title="Copy to clipboard">
             <span class="floaty-btn-text">Copy</span>
           </button>
@@ -188,9 +191,7 @@ class FloatyContentScript {
       </div>
     `
 
-           //   <button class="floaty-action-btn floaty-tasks-btn" title="Extract tasks">
-        //     <span class="floaty-btn-text">Tasks</span>
-        //   </button>
+      
     // Add event listeners
     const highlightBtn = this.popup.querySelector('.floaty-highlight-btn')
     const copyBtn = this.popup.querySelector('.floaty-copy-btn')
@@ -200,7 +201,7 @@ class FloatyContentScript {
     highlightBtn.addEventListener('click', () => this.highlightText())
     copyBtn.addEventListener('click', () => this.copyText())
     saveBtn.addEventListener('click', () => this.saveToNotes())
-    // tasksBtn.addEventListener('click', () => this.extractTasks())
+    tasksBtn.addEventListener('click', () => this.extractTasks())
 
     // Add to page
     document.body.appendChild(this.popup)
@@ -431,11 +432,10 @@ class FloatyContentScript {
         title: this.currentPageTitle,
         context: ''
       }, (taskResponse) => {
-        // Ensure tasks are objects with a 'text' property
+        // Use tasks as returned from background.js (already normalized)
         const tasks = (taskResponse && taskResponse.success && Array.isArray(taskResponse.tasks))
-          ? taskResponse.tasks.map(t => typeof t === 'string' ? { text: t } : t)
+          ? taskResponse.tasks
           : [];
-        // Always save, with or without tasks
         chrome.runtime.sendMessage({
           action: 'saveSelectedText',
           text: this.selectedText,
@@ -459,47 +459,39 @@ class FloatyContentScript {
 
   async extractTasks() {
     try {
-      console.log('Floaty: Attempting to extract tasks from:', this.selectedText.substring(0, 50) + '...');
-
       if (!this.selectedText) {
-        console.error('Floaty: No text selected to extract tasks from');
         this.showNotification('No text selected to extract tasks from', 'error');
         return;
       }
-
-      // Check if extension context is still valid
       if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
-        console.error('Floaty: Extension context invalid - extension may have been reloaded');
         this.showNotification('Extension context invalid. Please refresh the page.', 'error');
         return;
       }
-
-      // Send message to background script to detect tasks
       chrome.runtime.sendMessage({
         action: 'detectTasks',
         text: this.selectedText,
         context: ''
       }, (response) => {
-        console.log('Floaty: Detect tasks response:', response);
-
         if (chrome.runtime.lastError) {
-          console.error('Floaty: Runtime error:', chrome.runtime.lastError);
           this.showNotification('Failed to detect tasks: ' + chrome.runtime.lastError.message, 'error');
           return;
         }
-
         if (response && response.success) {
           this.showNotification(`Tasks detected! (${response.actionItems} tasks found)`, 'success');
-          // Now save the text and tasks
+          // Save tasks (already normalized)
           chrome.runtime.sendMessage({
             action: 'saveSelectedText',
             text: this.selectedText,
-            url: this.currentUrl,
-            title: this.currentPageTitle,
+            url: this.currentUrl || window.location.href,
+            title: this.currentPageTitle || document.title,
             context: '',
             extractTasks: true,
-            tasks: response.tasks // Pass the extracted tasks if you want to store them
+            tasks: response.tasks
           }, (saveResponse) => {
+            if (chrome.runtime.lastError) {
+              this.showNotification('Failed to save text and tasks: ' + chrome.runtime.lastError.message, 'error');
+              return;
+            }
             if (saveResponse && saveResponse.success) {
               this.showNotification('Text and tasks saved!', 'success');
             } else {
@@ -507,18 +499,16 @@ class FloatyContentScript {
             }
           });
         } else {
-          const errorMsg = response && response.error ? response.error : 'No tasks found';
-          console.error('Floaty: Detect tasks failed:', errorMsg);
+          const errorMsg = response?.error || 'No tasks found';
           this.showNotification(errorMsg, 'info');
         }
+        this.hidePopup();
       });
-
-      this.hidePopup();
     } catch (error) {
-      console.error('Floaty: Failed to detect tasks:', error);
       this.showNotification('Failed to detect tasks: ' + error.message, 'error');
     }
   }
+
 
   activateSpeechToText() {
     chrome.runtime.sendMessage({ action: 'speechToText' })

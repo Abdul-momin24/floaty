@@ -826,7 +826,8 @@ class FloatyExtension {
         this.renderSavedItems()
         break
       case "tasks":
-        this.renderTasks()
+        this.loadTasks()
+        
         break
     }
   }
@@ -1121,14 +1122,18 @@ class FloatyExtension {
     noteTextArea.value = ""
     if (contextField) contextField.value = ""
 
-    // Detect and show tasks if enabled (use Gemini)
+    // Detect and show tasks if enabled (use background.js for extraction)
     if (extractTasks?.checked) {
-      const detectedTasks = await this.gemini.extractActionItems(noteText, context)
-      if (detectedTasks.length > 0) {
-        // Convert to task objects
-        const tasks = detectedTasks.map(text => ({ text, context, priority: 'medium' }))
-        this.showTaskDetectionDialog(tasks)
-      }
+      chrome.runtime.sendMessage({
+        action: 'detectTasks',
+        text: noteText,
+        context: context
+      }, (response) => {
+        if (response && response.success && Array.isArray(response.tasks) && response.tasks.length > 0) {
+          // Tasks are already normalized
+          this.showTaskDetectionDialog(response.tasks)
+        }
+      })
     }
   }
 
@@ -1539,19 +1544,41 @@ class FloatyExtension {
       return
     }
 
-    const task = {
-      id: Date.now(),
+    // Always use background.js normalization for new tasks
+    const context = this.getContext();
+    const newTask = {
       text: taskContent,
-      completed: false,
-      createdAt: new Date().toISOString()
-    }
-
-    this.tasks.unshift(task)
-    this.saveData()
-    this.renderTasks()
-    this.updateTaskStats()
+      context: context,
+      priority: 'medium',
+      completed: false
+    };
+    // Ask background.js to normalize and save
+    chrome.runtime.sendMessage({
+      action: 'saveSelectedText',
+      text: taskContent,
+      url: '',
+      title: '',
+      context: context,
+      tasks: [newTask]
+    }, (response) => {
+      if (response && response.success) {
+        this.showNotification("Task added")
+        this.loadData(); // Reload to update UI
+      } else {
+        this.showNotification("Failed to add task", 'error')
+      }
+    });
     taskText.value = ""
-    this.showNotification("Task added")
+  }
+
+  loadTasks() {
+    // Always load tasks from background.js (normalized)
+    chrome.runtime.sendMessage({ action: 'loadData' }, (response) => {
+      if (response && response.success && response.data) {
+        this.tasks = response.data.tasks || [];
+        this.renderTasks();
+      }
+    });
   }
 
   renderTasks() {
@@ -1978,8 +2005,7 @@ class FloatyExtension {
 
   // Task Detection Methods
   showTaskDetectionDialog(tasks) {
-    const extractTasks = document.getElementById("extractTasksCheckbox");
-    if (extractTasks && !extractTasks.checked) return;
+    // Assume tasks are already normalized by background.js
     this.detectedTasks = tasks
     const dialog = document.getElementById("taskDetectionDialog")
     const tasksList = document.getElementById("detectedTasksList")
@@ -1996,9 +2022,9 @@ class FloatyExtension {
           <div class="detected-task-priority">
             <span class="priority-label">Priority:</span>
             <select class="priority-select" data-index="${index}">
-              <option value="high">High</option>
-              <option value="medium" selected>Medium</option>
-              <option value="low">Low</option>
+              <option value="high" ${task.priority === 'high' ? 'selected' : ''}>High</option>
+              <option value="medium" ${task.priority === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="low" ${task.priority === 'low' ? 'selected' : ''}>Low</option>
             </select>
           </div>
         </div>
@@ -2052,21 +2078,24 @@ class FloatyExtension {
       return this.detectedTasks[index]
     })
 
-    // Add selected tasks to the tasks list
-    selectedTasks.forEach(task => {
-      this.tasks.push({
-        id: Date.now() + Math.floor(Math.random() * 1000000),
-        text: task.text,
-        context: task.context,
-        priority: task.priority,
-        completed: false,
-        createdAt: new Date().toISOString()
-      })
-    })
-
-    // Update storage and UI
-    this.saveData()
-    this.renderTasks()
+    // Add selected tasks to the tasks list via background.js
+    if (selectedTasks.length > 0) {
+      chrome.runtime.sendMessage({
+        action: 'saveSelectedText',
+        text: selectedTasks.map(t => t.text).join('\n'),
+        url: '',
+        title: '',
+        context: selectedTasks[0]?.context || '',
+        tasks: selectedTasks
+      }, (response) => {
+        if (response && response.success) {
+          this.showNotification(`Added ${selectedTasks.length} tasks`)
+          this.loadData();
+        } else {
+          this.showNotification('Failed to add tasks', 'error')
+        }
+      });
+    }
     this.hideTaskDetectionDialog()
   }
 
