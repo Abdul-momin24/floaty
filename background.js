@@ -17,11 +17,20 @@ class FloatyBackground {
 
       // 2. Detect tasks
       if (message.action === 'detectTasks') {
-        let tasks = [];
-        if (message.text) {
-          tasks = extractTasksFromText(message.text, message.context || '');
-        }
-        sendResponse({ success: true, actionItems: tasks.length, tasks });
+        (async () => {
+          let tasks = [];
+          if (message.text) {
+            // Try Gemini extraction first
+            let geminiTasks = await gemini.extractActionItems(message.text, message.context || '');
+            if (Array.isArray(geminiTasks) && geminiTasks.length > 0) {
+              tasks = geminiTasks.map(t => normalizeTask(t, message.context || ''));
+            } else {
+              // Fallback to regex-based extraction
+              tasks = extractTasksFromText(message.text, message.context || '');
+            }
+          }
+          sendResponse({ success: true, actionItems: tasks.length, tasks });
+        })();
         return true;
       }
 
@@ -30,15 +39,39 @@ class FloatyBackground {
         chrome.storage.local.get({ notes: [] }, (result) => {
           const notes = result.notes || [];
           const context = message.context || '';
-          let tasks = Array.isArray(message.tasks) ? message.tasks.map(t => normalizeTask(t, context)) : [];
+          const url = message.url || '';
+          const date = getDateOnlyISOString();
+          let tasks = Array.isArray(message.tasks) ? message.tasks.map(t => normalizeTask(t, context, t.priority || 'medium', url, date)) : [];
+
+          // If this is a general task (no url, no title), only save one note and do not infer a source
+          if (!url && (!message.title || message.title === '')) {
+            const newNote = {
+              id: message.id || Date.now() + Math.floor(Math.random() * 1000000),
+              text: message.text,
+              content: message.text,
+              url: '',
+              title: '',
+              context,
+              date: date,
+              tasks,
+            };
+            notes.push(newNote);
+            chrome.storage.local.set({ notes }, () => {
+              console.log('✔️ General task note saved:', newNote);
+              sendResponse({ success: true });
+            });
+            return;
+          }
+
+          // Otherwise, save as a normal note (with url/title if present)
           const newNote = {
             id: message.id || Date.now() + Math.floor(Math.random() * 1000000),
             text: message.text,
             content: message.text,
-            url: message.url,
+            url: url,
             title: message.title,
             context,
-            date: new Date().toISOString(),
+            date: date,
             tasks,
           };
           notes.push(newNote);
@@ -78,6 +111,39 @@ class FloatyBackground {
   return true;
 }
 
+      if (message.action === 'deleteTask') {
+        const { taskId } = message;
+        if (!taskId) {
+          sendResponse({ success: false, error: 'No taskId provided' });
+          return true;
+        }
+        chrome.storage.local.get({ notes: [] }, (result) => {
+          let notes = result.notes || [];
+          let found = false;
+          notes = notes.map(note => {
+            if (Array.isArray(note.tasks)) {
+              const originalLength = note.tasks.length;
+              note.tasks = note.tasks.filter(task => {
+                // Compare IDs as strings for reliability
+                if (typeof task === 'object' && task.id) {
+                  return String(task.id) !== String(taskId);
+                }
+                return true;
+              });
+              if (note.tasks.length < originalLength) found = true;
+            }
+            return note;
+          });
+          if (found) {
+            chrome.storage.local.set({ notes }, () => {
+              sendResponse({ success: true });
+            });
+          } else {
+            sendResponse({ success: false, error: 'Task not found' });
+          }
+        });
+        return true;
+      }
 
       // Unknown action
 sendResponse({ success: false, error: 'Unknown action' })
@@ -98,7 +164,7 @@ sendResponse({ success: false, error: 'Unknown action' })
 }
 
 // Utility: Normalize a single task to object form
-function normalizeTask(task, context = '', priority = 'medium') {
+function normalizeTask(task, context = '', priority = 'medium', url = '', createdAt = null) {
   if (typeof task === 'string') {
     return {
       id: Date.now() + Math.floor(Math.random() * 1000000),
@@ -106,7 +172,8 @@ function normalizeTask(task, context = '', priority = 'medium') {
       context: context || '',
       priority,
       completed: false,
-      createdAt: new Date().toISOString(),
+      url: url || '',
+      createdAt: createdAt || getDateOnlyISOString(),
     };
   } else if (typeof task === 'object' && task.text) {
     return {
@@ -115,7 +182,8 @@ function normalizeTask(task, context = '', priority = 'medium') {
       context: task.context || context || '',
       priority: task.priority || priority,
       completed: typeof task.completed === 'boolean' ? task.completed : false,
-      createdAt: task.createdAt || new Date().toISOString(),
+      url: task.url || url || '',
+      createdAt: task.createdAt || createdAt || getDateOnlyISOString(),
     };
   }
   // Fallback: treat as string
@@ -125,7 +193,8 @@ function normalizeTask(task, context = '', priority = 'medium') {
     context: context || '',
     priority,
     completed: false,
-    createdAt: new Date().toISOString(),
+    url: url || '',
+    createdAt: createdAt || getDateOnlyISOString(),
   };
 }
 
@@ -153,6 +222,54 @@ function extractTasksFromText(text, context = '') {
   return tasks.map(t => normalizeTask(t, context));
 }
 
+// GeminiAIService for AI-powered action item extraction
+class GeminiAIService {
+  constructor() {
+    this.apiKey = "AIzaSyDCV74Ius71fdKhB6_YiXeUGCII8ak_3Wg"; // Hardcoded Gemini API key
+    this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+  }
+
+  async extractActionItems(text, context = "") {
+    try {
+      if (!this.apiKey || this.apiKey.trim() === "") {
+        return null;
+      }
+      const prompt = `Extract action items, tasks, or to-dos from the following text${context ? ` (context: ${context})` : ""}. Return only the action items, one per line, without numbering:\n\n${text}`;
+      const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to extract action items");
+      }
+      const data = await response.json();
+      const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+      return result
+        .split("\n")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && item.length < 100)
+        .slice(0, 5);
+    } catch (error) {
+      return null;
+    }
+  }
+}
+
+const gemini = new GeminiAIService();
+
 // Init
 new FloatyBackground()
 
@@ -160,3 +277,8 @@ new FloatyBackground()
 chrome.storage.local.get('notes', data => {
   console.log('📒 Stored Notes:', data.notes)
 })
+
+function getDateOnlyISOString() {
+  const d = new Date();
+  return d.toISOString().split('T')[0];
+}

@@ -1086,21 +1086,67 @@ class FloatyExtension {
 
     const noteText = noteTextArea.value
     const context = contextField?.value?.trim() || ""
+    const url = window.location.href;
+    const date = new Date().toISOString().split('T')[0];
 
     // Generate title using Gemini
     const title = await this.gemini.generateTitle(noteText, context)
 
-    // Create the note
+    // If AI extract tasks is enabled, do NOT save the note yet. Only show the extraction dialog.
+    if (extractTasks?.checked) {
+      chrome.runtime.sendMessage({
+        action: 'detectTasks',
+        text: noteText,
+        context: context,
+        url: url
+      }, (response) => {
+        if (response && response.success && Array.isArray(response.tasks) && response.tasks.length > 0) {
+          this.showTaskDetectionDialog(response.tasks)
+        } else {
+          // If no tasks found, allow saving as a normal note (without source)
+          const note = {
+            id: Date.now(),
+            content: noteText,
+            context: context,
+            title: title,
+            createdAt: date,
+            savedAt: date,
+            url: '' // No source
+          }
+          this.notes.push(note)
+          const newNote = {
+            id: Date.now() + Math.floor(Math.random() * 1000000),
+            title: title,
+            content: noteText,
+            text: noteText,
+            context: context,
+            tasks: [],
+            savedAt: date,
+            url: '' // No source
+          };
+          this.savedItems.unshift(newNote);
+          this.saveData()
+          this.renderNotes()
+          this.renderSavedItems()
+          this.showNotification("Note added and saved")
+        }
+      })
+      // Clear inputs
+      noteTextArea.value = ""
+      if (contextField) contextField.value = ""
+      return;
+    }
+
+    // If AI extract is not enabled, save as a normal note (with source)
     const note = {
       id: Date.now(),
       content: noteText,
       context: context,
       title: title,
-      createdAt: new Date().toISOString(),
-      savedAt: new Date().toISOString()
+      createdAt: date,
+      savedAt: date,
+      url: url
     }
-
-    // Add to notes and saved items
     this.notes.push(note)
     const newNote = {
       id: Date.now() + Math.floor(Math.random() * 1000000),
@@ -1109,32 +1155,17 @@ class FloatyExtension {
       text: noteText,
       context: context,
       tasks: [],
-      savedAt: new Date().toISOString(),
-      url: ''
+      savedAt: date,
+      url: url
     };
-    this.savedItems.unshift(newNote); // <-- Add to savedItems
+    this.savedItems.unshift(newNote);
     this.saveData()
     this.renderNotes()
     this.renderSavedItems()
     this.showNotification("Note added and saved")
-
     // Clear inputs
     noteTextArea.value = ""
     if (contextField) contextField.value = ""
-
-    // Detect and show tasks if enabled (use background.js for extraction)
-    if (extractTasks?.checked) {
-      chrome.runtime.sendMessage({
-        action: 'detectTasks',
-        text: noteText,
-        context: context
-      }, (response) => {
-        if (response && response.success && Array.isArray(response.tasks) && response.tasks.length > 0) {
-          // Tasks are already normalized
-          this.showTaskDetectionDialog(response.tasks)
-        }
-      })
-    }
   }
 
   detectTasks(noteText) {
@@ -1295,7 +1326,8 @@ class FloatyExtension {
                         ${note.title}
                     </div>
                     <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-                        ${note.context ? note.context + ' • ' : ''}${this.formatDate(note.timestamp)}
+                        ${note.context ? note.context + ' • ' : ''}${note.createdAt || note.savedAt || note.date || ''}
+                        ${note.url ? ` • <a href='${note.url}' target='_blank' style='color:#3b82f6;text-decoration:underline;'>Source</a>` : ''}
                     </div>
                     <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.4;">
                         ${this.truncateText(note.content, 100)}
@@ -1368,8 +1400,9 @@ class FloatyExtension {
                         ${item.title}
                     </div>
                     <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-                        ${item.context ? item.context + ' • ' : ''}Saved ${this.formatDate(item.savedAt)}
-                        ${item.editedAt ? ` • Edited ${this.formatDate(item.editedAt)}` : ''}
+                        ${item.context ? item.context + ' • ' : ''}${item.createdAt || item.savedAt || item.date || ''}
+                        ${item.url ? ` • <a href='${item.url}' target='_blank' style='color:#3b82f6;text-decoration:underline;'>Source</a>` : ''}
+                        ${item.editedAt ? ` • Edited ${item.editedAt}` : ''}
                     </div>
                     <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.4;">
                         ${this.truncateText(item.content, 100)}
@@ -1544,26 +1577,28 @@ class FloatyExtension {
       return
     }
 
-    // Always use background.js normalization for new tasks
+    // For general tasks, context may be set, but url and title must be empty
     const context = this.getContext();
+    const createdAt = new Date().toISOString().split('T')[0];
     const newTask = {
       text: taskContent,
       context: context,
       priority: 'medium',
-      completed: false
+      completed: false,
+      createdAt: createdAt
+      // No url field for general tasks
     };
-    // Ask background.js to normalize and save
     chrome.runtime.sendMessage({
       action: 'saveSelectedText',
       text: taskContent,
-      url: '',
+      url: '', // Always empty for general tasks
       title: '',
       context: context,
       tasks: [newTask]
     }, (response) => {
       if (response && response.success) {
         this.showNotification("Task added")
-        this.loadData(); // Reload to update UI
+        this.loadTasks(); // Reload to update UI
       } else {
         this.showNotification("Failed to add task", 'error')
       }
@@ -1571,12 +1606,13 @@ class FloatyExtension {
     taskText.value = ""
   }
 
-  loadTasks() {
+  loadTasks(callback) {
     // Always load tasks from background.js (normalized)
     chrome.runtime.sendMessage({ action: 'loadData' }, (response) => {
       if (response && response.success && response.data) {
         this.tasks = response.data.tasks || [];
         this.renderTasks();
+        if (callback) callback();
       }
     });
   }
@@ -1595,13 +1631,25 @@ class FloatyExtension {
     const newContainer = container.cloneNode(false)
     container.parentNode.replaceChild(newContainer, container)
 
+    function truncateToTwoLines(text) {
+      const clean = text.replace(/\s+/g, ' ').trim();
+      return clean.length > 120 ? clean.substring(0, 117) + '...' : clean;
+    }
+
     newContainer.innerHTML = this.tasks
       .map(
         (task) => `
             <div class="task-item${task.completed ? ' completed' : ''}" data-id="${task.id}">
-                <div class="task-content">
+                <div class="task-content" style="display: flex; align-items: center;">
                     <input type="checkbox" class="task-checkbox" ${task.completed ? "checked" : ""}>
-                    <span class="task-text${task.completed ? ' task-text-completed' : ''}">${task.text}</span>
+                    <span class="task-text${task.completed ? ' task-text-completed' : ''}"
+                          style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; max-width: 320px; white-space: normal; cursor: pointer; margin-left: 8px;">
+                      ${truncateToTwoLines(task.text)}
+                    </span>
+                </div>
+                <div style="font-size: 11px; color: #888; margin: 2px 0 0 32px;">
+                  <span>${task.createdAt || ''}</span>
+                  ${task.url ? (task.url.trim() ? `<span style='margin-left:8px;'><a href='${task.url}' target='_blank' style='color:#3b82f6;text-decoration:underline;'>Source</a></span>` : '') : ''}
                 </div>
                 <div class="task-actions">
                     <button class="icon-btn edit-task-btn" title="Edit task">
@@ -1622,7 +1670,6 @@ class FloatyExtension {
       )
       .join("")
 
-    // Add event listeners using event delegation
     newContainer.addEventListener('click', (e) => {
       const taskItem = e.target.closest('.task-item')
       if (!taskItem) return
@@ -1635,8 +1682,48 @@ class FloatyExtension {
         this.editTask(taskId)
       } else if (e.target.closest('.delete-task-btn')) {
         this.deleteTask(taskId)
+      } else if (e.target.closest('.task-text')) {
+        const task = this.tasks.find(t => t.id === taskId)
+        if (task) this.showTaskModal(task)
       }
     })
+  }
+
+  // Add a modal to show the full task text
+  showTaskModal(task) {
+    // Remove any existing modal
+    const existing = document.getElementById('floaty-popup-task-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'floaty-popup-task-modal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.25); z-index: 10001;
+      display: flex; align-items: center; justify-content: center;
+    `;
+
+    const inner = document.createElement('div');
+    inner.style.cssText = `
+      background: #fff; border-radius: 10px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+      padding: 24px 28px; min-width: 320px; max-width: 90vw; max-height: 80vh; overflow-y: auto;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; position: relative;
+    `;
+
+    inner.innerHTML = `
+      <div style="font-size: 18px; font-weight: 600; margin-bottom: 12px;">Task</div>
+      <div style="font-size: 15px; color: #222; margin-bottom: 18px; white-space: pre-wrap;">${task.text}</div>
+      <button id="floaty-popup-close-task-modal" style="position: absolute; top: 10px; right: 12px; background: none; border: none; font-size: 20px; color: #888; cursor: pointer;">×</button>
+      <button id="floaty-popup-close-task-modal-btn" style="display: block; margin: 0 auto; padding: 7px 22px; background: #3b82f6; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer;">Close</button>
+    `;
+
+    modal.appendChild(inner);
+    document.body.appendChild(modal);
+
+    // Close handlers
+    document.getElementById('floaty-popup-close-task-modal').onclick =
+      document.getElementById('floaty-popup-close-task-modal-btn').onclick =
+        () => modal.remove();
   }
 
   toggleTask(taskId) {
@@ -1651,11 +1738,15 @@ class FloatyExtension {
 
   deleteTask(taskId) {
     if (confirm('Are you sure you want to delete this task?')) {
-      this.tasks = this.tasks.filter((t) => t.id !== taskId)
-      this.saveData()
-      this.renderTasks()
-      this.updateTaskStats()
-      this.showNotification('Task deleted')
+      // Persistently delete the task via background.js
+      chrome.runtime.sendMessage({ action: 'deleteTask', taskId }, (response) => {
+        if (response && response.success) {
+          this.showNotification('Task deleted')
+          this.loadTasks(() => this.updateTaskStats())
+        } else {
+          this.showNotification('Failed to delete task', 'error')
+        }
+      })
     }
   }
 
@@ -2080,10 +2171,11 @@ class FloatyExtension {
 
     // Add selected tasks to the tasks list via background.js
     if (selectedTasks.length > 0) {
+      // If these are general tasks (from popup, not from a webpage), url and title should be empty
       chrome.runtime.sendMessage({
         action: 'saveSelectedText',
         text: selectedTasks.map(t => t.text).join('\n'),
-        url: '',
+        url: '', // Always empty for general tasks
         title: '',
         context: selectedTasks[0]?.context || '',
         tasks: selectedTasks

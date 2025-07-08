@@ -477,7 +477,6 @@ class FloatyContentScript {
           return;
         }
         if (response && response.success) {
-          this.showNotification(`Tasks detected! (${response.actionItems} tasks found)`, 'success');
           // Save tasks (already normalized)
           chrome.runtime.sendMessage({
             action: 'saveSelectedText',
